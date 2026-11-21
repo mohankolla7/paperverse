@@ -3,7 +3,7 @@ import { X, Cpu, Check, AlertCircle, Sparkles } from 'lucide-react';
 import { AVAILABLE_MODELS } from '../lib/gemini';
 
 export default function SettingsModal({ isOpen, onClose, currentModel, onSaveModel }) {
-  const [selectedModel, setSelectedModel] = useState(currentModel || 'gemini-2.5-flash');
+  const [selectedModel, setSelectedModel] = useState(currentModel || 'gemini-3.5-flash');
   const [customModel, setCustomModel] = useState('');
   const [isCustom, setIsCustom] = useState(!AVAILABLE_MODELS.some((m) => m.id === currentModel));
 

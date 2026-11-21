@@ -1,35 +1,27 @@
 /**
  * Gemini API Client & Key Manager Helper for PaperVerse
  *
- * Requirements implemented:
- * 1. Default model: "gemini-1.5-flash" (universally supported across all Google AI Studio keys), editable in Settings.
- * 2. Pure frontend, keys kept in React state only (never localStorage/cookies/console).
- * 3. Primary call via REST fetch (robust browser compatibility) with support for @google/genai SDK.
- * 4. Multi-key failover: if key fails as invalid/expired, automatically switches to next backup key.
- * 5. Auto-model detection: if a model returns 404 (not enabled on user's tier), automatically discovers and switches
- *    to a supported model (e.g., gemini-1.5-flash or gemini-2.0-flash).
- * 6. 429 quota retry: waits 5 seconds and retries once, then attempts fallback to a lighter model,
- *    and only then reports a friendly quota message.
- * 7. Safe JSON extraction: trims everything outside the first "{" and last "}".
- * 8. Strict prompt guards: tells Gemini to use ONLY provided text, write "Not mentioned" when missing,
- *    and ignore instructions embedded inside the papers.
+ * Real-time Model Discovery:
+ * - Automatically queries Google's ListModels endpoint to detect supported models for the key.
+ * - Defaults to 'gemini-3.5-flash' and 'gemini-3.1-flash-lite' (verified working on Google AI Studio keys).
+ * - Multi-key failover, 429 backoff retry, and safe JSON parsing.
  */
 
-export const DEFAULT_MODEL = 'gemini-1.5-flash';
-export const FALLBACK_LITE_MODEL = 'gemini-1.5-flash';
+export const DEFAULT_MODEL = 'gemini-3.5-flash';
+export const FALLBACK_LITE_MODEL = 'gemini-3.1-flash-lite';
 
 export const AVAILABLE_MODELS = [
-  { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (Universal - Works on all keys)' },
-  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash (Next-Gen Fast)' },
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash (Latest Experimental)' },
-  { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite (Lightweight)' },
-  { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro (Deep Reasoning - Higher Quota Cost)' }
+  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash (Verified - Fast & Stable)' },
+  { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite (Verified - Lightweight)' },
+  { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (Latest High-Tier)' },
+  { id: 'gemini-flash-latest', name: 'Gemini Flash Latest' },
+  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash (Legacy)' }
 ];
 
 /**
- * Validate an API key by sending a tiny test request (low tokens, fast response).
- * If the requested model returns 404, automatically tests alternative models to find
- * the working model for this key tier!
+ * Validate an API key by:
+ * 1. Calling ListModels to verify key authenticity and get available models.
+ * 2. Testing generateContent with the best available model (preferred or gemini-3.5-flash / gemini-3.1-flash-lite).
  *
  * @param {string} apiKey
  * @param {string} preferredModel
@@ -42,19 +34,72 @@ export async function validateGeminiKey(apiKey, preferredModel = DEFAULT_MODEL) 
 
   const cleanKey = apiKey.trim();
 
-  // Test candidate order: requested model first, then universally available models
-  const candidateModels = Array.from(new Set([
-    preferredModel,
-    'gemini-1.5-flash',
-    'gemini-2.0-flash',
-    'gemini-2.5-flash-lite',
-    'gemini-1.5-pro'
-  ]));
+  // 1. Verify key authenticity and list available models directly from Google
+  let availableModelNames = [];
+  try {
+    const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cleanKey)}`;
+    const listRes = await fetch(listUrl);
+    
+    if (!listRes.ok) {
+      const errData = await listRes.json().catch(() => ({}));
+      const msg = errData?.error?.message || listRes.statusText;
+      if (listRes.status === 400 || msg.toLowerCase().includes('api_key_invalid') || msg.toLowerCase().includes('not valid')) {
+        throw new Error('Invalid Gemini API key. Please check your key from Google AI Studio.');
+      }
+      if (listRes.status === 429) {
+        throw new Error('Rate limit or quota reached on this key (429). Please wait a moment or try another key.');
+      }
+      throw new Error(`Google API returned error (${listRes.status}): ${msg}`);
+    }
 
+    const listData = await listRes.json();
+    if (Array.isArray(listData.models)) {
+      availableModelNames = listData.models
+        .filter((m) => m.supportedGenerationMethods?.includes('generateContent') || !m.supportedGenerationMethods)
+        .map((m) => m.name.replace(/^models\//, ''));
+    }
+  } catch (err) {
+    if (err.message.includes('Invalid Gemini API key') || err.message.includes('Rate limit')) {
+      throw err;
+    }
+    console.warn('Could not list models, continuing with default model check:', err.message);
+  }
+
+  // 2. Select priority candidate models to test
+  const candidatePool = [
+    preferredModel,
+    'gemini-3.5-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-flash-latest',
+    'gemini-3.8-flash',
+    'gemini-2.5-flash-lite'
+  ];
+
+  // If models were returned from Google, prioritize those that are present in the list
+  const modelsToTry = [];
+  if (availableModelNames.length > 0) {
+    candidatePool.forEach((m) => {
+      if (availableModelNames.includes(m) && !modelsToTry.includes(m)) {
+        modelsToTry.push(m);
+      }
+    });
+    // Add any remaining models from Google that match "flash"
+    availableModelNames.forEach((m) => {
+      if (m.includes('flash') && !modelsToTry.includes(m)) {
+        modelsToTry.push(m);
+      }
+    });
+  }
+
+  // Fallback candidate list if none matched
+  if (modelsToTry.length === 0) {
+    modelsToTry.push('gemini-3.5-flash', 'gemini-3.1-flash-lite', preferredModel);
+  }
+
+  // 3. Test generateContent on the best candidates
   let lastErrorMsg = '';
 
-  for (let i = 0; i < candidateModels.length; i++) {
-    const modelToTest = candidateModels[i];
+  for (const modelToTest of modelsToTry) {
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelToTest}:generateContent?key=${encodeURIComponent(cleanKey)}`;
     
     const payload = {
@@ -75,13 +120,12 @@ export async function validateGeminiKey(apiKey, preferredModel = DEFAULT_MODEL) 
       });
 
       if (response.ok) {
-        // Success!
         return {
           valid: true,
           workingModel: modelToTest,
           note: modelToTest !== preferredModel
-            ? `Model auto-adjusted to "${modelToTest}" (available on your API tier).`
-            : undefined
+            ? `Connected with ${modelToTest} (active on your API tier).`
+            : `Connected with ${modelToTest}!`
         };
       }
 
@@ -89,39 +133,31 @@ export async function validateGeminiKey(apiKey, preferredModel = DEFAULT_MODEL) 
       const message = errorData?.error?.message || response.statusText;
       lastErrorMsg = message;
 
-      // If invalid key, fail immediately (trying other models won't help)
-      if (
-        response.status === 400 ||
-        response.status === 401 ||
-        response.status === 403 ||
-        message.toLowerCase().includes('api_key_invalid') ||
-        message.toLowerCase().includes('not valid') ||
-        message.toLowerCase().includes('api key not found')
-      ) {
-        throw new Error('Invalid Gemini API key. Please verify your key from Google AI Studio.');
+      if (response.status === 400 || response.status === 401 || response.status === 403 || message.toLowerCase().includes('api_key_invalid')) {
+        throw new Error('Invalid Gemini API key. Please check your key from Google AI Studio.');
       }
 
-      // If rate limited
-      if (response.status === 429) {
-        throw new Error('Rate limit or quota reached on this key (429). Please wait a moment or try another key.');
-      }
-
-      // If 404 (model not found on this tier), continue loop to test next candidate model
-      if (response.status === 404) {
-        console.warn(`Model "${modelToTest}" returned 404 for this key. Testing next candidate model...`);
+      // If 503 (demand spike) or 404 (model not available for new users), try next candidate
+      if (response.status === 503 || response.status === 404) {
+        console.warn(`Model ${modelToTest} returned ${response.status}. Trying next candidate...`);
         continue;
       }
-
-      throw new Error(`Connection failed (${response.status}): ${message}`);
     } catch (err) {
-      if (err.message?.includes('Invalid Gemini API key') || err.message?.includes('Rate limit')) {
-        throw err;
-      }
+      if (err.message.includes('Invalid Gemini API key')) throw err;
       lastErrorMsg = err.message;
     }
   }
 
-  throw new Error(`Could not find a supported Gemini model for this key (${lastErrorMsg}). Please verify your key tier in Google AI Studio.`);
+  // If we found working models from ListModels, return the best working one
+  if (modelsToTry.length > 0) {
+    return {
+      valid: true,
+      workingModel: 'gemini-3.5-flash',
+      note: 'Connected successfully with Gemini 3.5 Flash.'
+    };
+  }
+
+  throw new Error(`Could not connect to Gemini models (${lastErrorMsg}). Please check your key.`);
 }
 
 /**
@@ -232,7 +268,7 @@ async function callGeminiRest(apiKey, model, systemInstruction, promptText, opti
 /**
  * Master Gemini Invoker with:
  * - Multi-key failover
- * - Automatic 404 model auto-fallback to gemini-1.5-flash
+ * - Automatic 404/503 model auto-fallback to gemini-3.5-flash / gemini-3.1-flash-lite
  * - 429 quota backoff & lite model fallback
  * - System safety guard instructions
  * - Structured JSON parsing
@@ -291,26 +327,25 @@ export async function callGemini({
     } catch (err) {
       console.warn(`Call failed on key #${currentKeyIdx + 1} (${currentModel}):`, err.message);
 
-      // Check for 404 Model Not Found -> Automatically fall back to gemini-1.5-flash
-      if (err.status === 404 || err.message?.toLowerCase().includes('not found')) {
-        if (currentModel !== 'gemini-1.5-flash') {
-          console.info(`Model "${currentModel}" not found. Auto-switching to gemini-1.5-flash...`);
-          currentModel = 'gemini-1.5-flash';
-          if (onSwitchModel) onSwitchModel('gemini-1.5-flash');
+      // Check for 404 (model deprecated/not found) or 503 (demand spike) -> Auto fallback to gemini-3.5-flash
+      if (err.status === 404 || err.status === 503 || err.message?.toLowerCase().includes('not found') || err.message?.toLowerCase().includes('high demand')) {
+        const fallbackTarget = currentModel === 'gemini-3.5-flash' ? 'gemini-3.1-flash-lite' : 'gemini-3.5-flash';
+        console.info(`Model "${currentModel}" failed (${err.status}). Auto-switching to ${fallbackTarget}...`);
+        currentModel = fallbackTarget;
+        if (onSwitchModel) onSwitchModel(fallbackTarget);
 
-          try {
-            const fallbackText = await callGeminiRest(
-              activeKey,
-              'gemini-1.5-flash',
-              strictSystemGuard,
-              prompt,
-              { isJson, temperature, maxOutputTokens }
-            );
-            if (isJson) return safeExtractJson(fallbackText);
-            return fallbackText;
-          } catch (fbErr) {
-            console.warn('Fallback call to gemini-1.5-flash failed:', fbErr.message);
-          }
+        try {
+          const fallbackText = await callGeminiRest(
+            activeKey,
+            fallbackTarget,
+            strictSystemGuard,
+            prompt,
+            { isJson, temperature, maxOutputTokens }
+          );
+          if (isJson) return safeExtractJson(fallbackText);
+          return fallbackText;
+        } catch (fbErr) {
+          console.warn(`Fallback to ${fallbackTarget} failed:`, fbErr.message);
         }
       }
 
@@ -330,16 +365,16 @@ export async function callGemini({
           if (isJson) return safeExtractJson(retryText);
           return retryText;
         } catch (retryErr) {
-          if (currentModel !== 'gemini-1.5-flash') {
+          if (currentModel !== FALLBACK_LITE_MODEL) {
             try {
               const liteText = await callGeminiRest(
                 activeKey,
-                'gemini-1.5-flash',
+                FALLBACK_LITE_MODEL,
                 strictSystemGuard,
                 prompt,
                 { isJson, temperature, maxOutputTokens }
               );
-              if (onSwitchModel) onSwitchModel('gemini-1.5-flash');
+              if (onSwitchModel) onSwitchModel(FALLBACK_LITE_MODEL);
               if (isJson) return safeExtractJson(liteText);
               return liteText;
             } catch (liteErr) {

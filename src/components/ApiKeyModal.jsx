@@ -19,7 +19,7 @@ export default function ApiKeyModal({
     return list;
   });
 
-  const [selectedModel, setSelectedModel] = useState(currentModel || 'gemini-1.5-flash');
+  const [selectedModel, setSelectedModel] = useState(currentModel || 'gemini-3.5-flash');
   const [showKey, setShowKey] = useState([false, false, false]);
   const [isValidating, setIsValidating] = useState(false);
   const [validationSuccess, setValidationSuccess] = useState(false);
