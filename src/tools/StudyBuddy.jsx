@@ -14,7 +14,7 @@ Raft decomposes consensus into three independent subproblems:
 
 Split votes in Raft are prevented through randomized election timeouts, ensuring that one candidate usually times out before others and wins the majority quorum.`;
 
-export default function StudyBuddy({ apiKeys, activeKeyIndex, onSwitchKey, model, onOpenKeyModal }) {
+export default function StudyBuddy({ apiKeys, activeKeyIndex, onSwitchKey, onSwitchModel, model, onOpenKeyModal }) {
   const [file, setFile] = useState(null);
   const [notesText, setNotesText] = useState('');
   const [useTextInput, setUseTextInput] = useState(true);
@@ -118,6 +118,7 @@ Do not wrap in markdown or backticks.`;
         apiKeys,
         activeKeyIndex,
         onSwitchKey,
+        onSwitchModel,
         model,
         systemInstruction,
         prompt,

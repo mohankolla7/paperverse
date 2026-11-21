@@ -8,7 +8,7 @@ const SAMPLE_PAPER = {
   text: `Quantum computers exploit quantum mechanical phenomena such as superposition and entanglement to perform calculations exponentially faster than classical supercomputers for specific problem classes. Qubits can exist in a linear combination of states |0> and |1>. Quantum gates operate through unitary transformations on state vectors. Shor's algorithm provides exponential speedup for integer factorization, threatening RSA encryption. Grover's algorithm provides quadratic speedup for unstructured database search. Current devices operate in the Noisy Intermediate-Scale Quantum (NISQ) era with 50 to 1,000 physical qubits. Fault-tolerant quantum computing requires quantum error correction (such as surface codes), which incurs an overhead of roughly 1,000 physical qubits per logical qubit. Major physical hardware implementations include superconducting transmon qubits (IBM, Google), trapped ions (IonQ, Quantinuum), and neutral atoms (QuEra). Decoherence times and two-qubit gate fidelities currently cap quantum circuit depth at around 100-200 sequential gate layers.`
 };
 
-export default function ChatWithPaper({ apiKeys, activeKeyIndex, onSwitchKey, model, onOpenKeyModal }) {
+export default function ChatWithPaper({ apiKeys, activeKeyIndex, onSwitchKey, onSwitchModel, model, onOpenKeyModal }) {
   const [file, setFile] = useState(null);
   const [paperText, setPaperText] = useState('');
   const [paperTitle, setPaperTitle] = useState('');
@@ -122,6 +122,7 @@ Answer strictly following the rules:`;
         apiKeys,
         activeKeyIndex,
         onSwitchKey,
+        onSwitchModel,
         model,
         systemInstruction,
         prompt,

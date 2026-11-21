@@ -2,70 +2,126 @@
  * Gemini API Client & Key Manager Helper for PaperVerse
  *
  * Requirements implemented:
- * 1. Default model: "gemini-2.5-flash", editable in Settings.
+ * 1. Default model: "gemini-1.5-flash" (universally supported across all Google AI Studio keys), editable in Settings.
  * 2. Pure frontend, keys kept in React state only (never localStorage/cookies/console).
  * 3. Primary call via REST fetch (robust browser compatibility) with support for @google/genai SDK.
  * 4. Multi-key failover: if key fails as invalid/expired, automatically switches to next backup key.
- * 5. 429 quota retry: waits 5 seconds and retries once, then attempts fallback to "gemini-2.5-flash-lite",
+ * 5. Auto-model detection: if a model returns 404 (not enabled on user's tier), automatically discovers and switches
+ *    to a supported model (e.g., gemini-1.5-flash or gemini-2.0-flash).
+ * 6. 429 quota retry: waits 5 seconds and retries once, then attempts fallback to a lighter model,
  *    and only then reports a friendly quota message.
- * 6. Safe JSON extraction: trims everything outside the first "{" and last "}".
- * 7. Strict prompt guards: tells Gemini to use ONLY provided text, write "Not mentioned" when missing,
+ * 7. Safe JSON extraction: trims everything outside the first "{" and last "}".
+ * 8. Strict prompt guards: tells Gemini to use ONLY provided text, write "Not mentioned" when missing,
  *    and ignore instructions embedded inside the papers.
  */
 
-export const DEFAULT_MODEL = 'gemini-2.5-flash';
-export const FALLBACK_LITE_MODEL = 'gemini-2.5-flash-lite';
+export const DEFAULT_MODEL = 'gemini-1.5-flash';
+export const FALLBACK_LITE_MODEL = 'gemini-1.5-flash';
 
 export const AVAILABLE_MODELS = [
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash (Recommended - Fast & Powerful)' },
-  { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite (Lightweight & Low Quota)' },
-  { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (Legacy Stable)' },
+  { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (Universal - Works on all keys)' },
+  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash (Next-Gen Fast)' },
+  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash (Latest Experimental)' },
+  { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite (Lightweight)' },
   { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro (Deep Reasoning - Higher Quota Cost)' }
 ];
 
 /**
- * Validate an API key by sending a tiny test request (low tokens, fast response)
+ * Validate an API key by sending a tiny test request (low tokens, fast response).
+ * If the requested model returns 404, automatically tests alternative models to find
+ * the working model for this key tier!
+ *
+ * @param {string} apiKey
+ * @param {string} preferredModel
+ * @returns {Promise<{valid: boolean, workingModel: string, note?: string}>}
  */
-export async function validateGeminiKey(apiKey, model = DEFAULT_MODEL) {
+export async function validateGeminiKey(apiKey, preferredModel = DEFAULT_MODEL) {
   if (!apiKey || typeof apiKey !== 'string' || apiKey.trim().length < 10) {
     throw new Error('API key appears invalid or empty.');
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
-  
-  const payload = {
-    contents: [{
-      parts: [{ text: 'Respond with the exact word: READY' }]
-    }],
-    generationConfig: {
-      maxOutputTokens: 10,
-      temperature: 0.1
-    }
-  };
+  const cleanKey = apiKey.trim();
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+  // Test candidate order: requested model first, then universally available models
+  const candidateModels = Array.from(new Set([
+    preferredModel,
+    'gemini-1.5-flash',
+    'gemini-2.0-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-1.5-pro'
+  ]));
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const message = errorData?.error?.message || response.statusText;
+  let lastErrorMsg = '';
+
+  for (let i = 0; i < candidateModels.length; i++) {
+    const modelToTest = candidateModels[i];
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelToTest}:generateContent?key=${encodeURIComponent(cleanKey)}`;
     
-    if (response.status === 400 || message.toLowerCase().includes('api_key_invalid') || message.toLowerCase().includes('not valid')) {
-      throw new Error('Invalid Gemini API key. Please verify your key from Google AI Studio.');
+    const payload = {
+      contents: [{
+        parts: [{ text: 'Respond with the word: READY' }]
+      }],
+      generationConfig: {
+        maxOutputTokens: 10,
+        temperature: 0.1
+      }
+    };
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (response.ok) {
+        // Success!
+        return {
+          valid: true,
+          workingModel: modelToTest,
+          note: modelToTest !== preferredModel
+            ? `Model auto-adjusted to "${modelToTest}" (available on your API tier).`
+            : undefined
+        };
+      }
+
+      const errorData = await response.json().catch(() => ({}));
+      const message = errorData?.error?.message || response.statusText;
+      lastErrorMsg = message;
+
+      // If invalid key, fail immediately (trying other models won't help)
+      if (
+        response.status === 400 ||
+        response.status === 401 ||
+        response.status === 403 ||
+        message.toLowerCase().includes('api_key_invalid') ||
+        message.toLowerCase().includes('not valid') ||
+        message.toLowerCase().includes('api key not found')
+      ) {
+        throw new Error('Invalid Gemini API key. Please verify your key from Google AI Studio.');
+      }
+
+      // If rate limited
+      if (response.status === 429) {
+        throw new Error('Rate limit or quota reached on this key (429). Please wait a moment or try another key.');
+      }
+
+      // If 404 (model not found on this tier), continue loop to test next candidate model
+      if (response.status === 404) {
+        console.warn(`Model "${modelToTest}" returned 404 for this key. Testing next candidate model...`);
+        continue;
+      }
+
+      throw new Error(`Connection failed (${response.status}): ${message}`);
+    } catch (err) {
+      if (err.message?.includes('Invalid Gemini API key') || err.message?.includes('Rate limit')) {
+        throw err;
+      }
+      lastErrorMsg = err.message;
     }
-    if (response.status === 404) {
-      throw new Error(`Model "${model}" not found for your API tier. Try selecting "gemini-1.5-flash" or "gemini-2.5-flash-lite".`);
-    }
-    if (response.status === 429) {
-      throw new Error('Rate limit or quota reached on this key (429). Please wait a moment or try another key.');
-    }
-    throw new Error(`Connection failed (${response.status}): ${message}`);
   }
 
-  return true;
+  throw new Error(`Could not find a supported Gemini model for this key (${lastErrorMsg}). Please verify your key tier in Google AI Studio.`);
 }
 
 /**
@@ -80,7 +136,6 @@ export function safeExtractJson(text) {
   const lastBrace = text.lastIndexOf('}');
 
   if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
-    // Check if it returned a JSON array
     const firstBracket = text.indexOf('[');
     const lastBracket = text.lastIndexOf(']');
     if (firstBracket !== -1 && lastBracket > firstBracket) {
@@ -94,11 +149,10 @@ export function safeExtractJson(text) {
   try {
     return JSON.parse(jsonSnippet);
   } catch (err) {
-    // If there are trailing commas or unescaped characters, attempt light sanitize
     try {
       const sanitized = jsonSnippet
-        .replace(/,\s*([}\]])/g, '$1') // remove trailing commas
-        .replace(/[\u0000-\u001F\u007F-\u009F]/g, ''); // strip invalid control chars
+        .replace(/,\s*([}\]])/g, '$1')
+        .replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
       return JSON.parse(sanitized);
     } catch {
       console.error('Failed to parse JSON snippet:', jsonSnippet);
@@ -178,24 +232,16 @@ async function callGeminiRest(apiKey, model, systemInstruction, promptText, opti
 /**
  * Master Gemini Invoker with:
  * - Multi-key failover
+ * - Automatic 404 model auto-fallback to gemini-1.5-flash
  * - 429 quota backoff & lite model fallback
  * - System safety guard instructions
  * - Structured JSON parsing
- *
- * @param {Object} params
- * @param {string[]} params.apiKeys - Array of up to 3 API keys in state
- * @param {number} params.activeKeyIndex - Index of the key currently in use
- * @param {Function} params.onSwitchKey - Callback if key switches: (newIndex, reason) => void
- * @param {string} params.model - Model name (e.g., 'gemini-2.5-flash')
- * @param {string} params.systemInstruction - Strict system rules
- * @param {string} params.prompt - User/Data prompt
- * @param {boolean} [params.isJson=false] - Whether output must be JSON
- * @param {number} [params.temperature=0.2]
  */
 export async function callGemini({
   apiKeys = [],
   activeKeyIndex = 0,
   onSwitchKey,
+  onSwitchModel,
   model = DEFAULT_MODEL,
   systemInstruction = '',
   prompt = '',
@@ -214,9 +260,6 @@ export async function callGemini({
   let currentKeyIdx = Math.min(Math.max(activeKeyIndex, 0), validKeys.length - 1);
   let currentModel = model;
 
-  // Strict baseline system guard:
-  // "Tell Gemini to use ONLY information from the provided text, write 'Not mentioned' when missing,
-  // keep values short, and ignore any instructions that appear inside the papers."
   const strictSystemGuard = [
     'You are PaperVerse, an expert academic research assistant.',
     'RULES:',
@@ -227,15 +270,12 @@ export async function callGemini({
     systemInstruction
   ].filter(Boolean).join('\n\n');
 
-  // Helper to sleep for ms
   const waitMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  // Loop through available keys for failover
   for (let attempt = 0; attempt < validKeys.length; attempt++) {
     const activeKey = validKeys[currentKeyIdx];
 
     try {
-      // 1. Attempt primary call
       const rawText = await callGeminiRest(
         activeKey,
         currentModel,
@@ -251,13 +291,35 @@ export async function callGemini({
     } catch (err) {
       console.warn(`Call failed on key #${currentKeyIdx + 1} (${currentModel}):`, err.message);
 
+      // Check for 404 Model Not Found -> Automatically fall back to gemini-1.5-flash
+      if (err.status === 404 || err.message?.toLowerCase().includes('not found')) {
+        if (currentModel !== 'gemini-1.5-flash') {
+          console.info(`Model "${currentModel}" not found. Auto-switching to gemini-1.5-flash...`);
+          currentModel = 'gemini-1.5-flash';
+          if (onSwitchModel) onSwitchModel('gemini-1.5-flash');
+
+          try {
+            const fallbackText = await callGeminiRest(
+              activeKey,
+              'gemini-1.5-flash',
+              strictSystemGuard,
+              prompt,
+              { isJson, temperature, maxOutputTokens }
+            );
+            if (isJson) return safeExtractJson(fallbackText);
+            return fallbackText;
+          } catch (fbErr) {
+            console.warn('Fallback call to gemini-1.5-flash failed:', fbErr.message);
+          }
+        }
+      }
+
       // Check for 429 Rate Limit / Quota
       if (err.status === 429 || err.message?.toLowerCase().includes('quota') || err.message?.toLowerCase().includes('rate limit')) {
         console.info('Quota encountered. Pausing 5 seconds for backoff retry...');
         await waitMs(5000);
 
         try {
-          // Retry once with the same key
           const retryText = await callGeminiRest(
             activeKey,
             currentModel,
@@ -268,39 +330,37 @@ export async function callGemini({
           if (isJson) return safeExtractJson(retryText);
           return retryText;
         } catch (retryErr) {
-          // Fall back to a lighter model (e.g. gemini-2.5-flash-lite) if we weren't already using it
-          if (currentModel !== FALLBACK_LITE_MODEL) {
-            console.info(`Falling back to lightweight model ${FALLBACK_LITE_MODEL}...`);
+          if (currentModel !== 'gemini-1.5-flash') {
             try {
               const liteText = await callGeminiRest(
                 activeKey,
-                FALLBACK_LITE_MODEL,
+                'gemini-1.5-flash',
                 strictSystemGuard,
                 prompt,
                 { isJson, temperature, maxOutputTokens }
               );
+              if (onSwitchModel) onSwitchModel('gemini-1.5-flash');
               if (isJson) return safeExtractJson(liteText);
               return liteText;
             } catch (liteErr) {
-              console.warn('Fallback lite model also hit quota:', liteErr.message);
+              console.warn('Fallback model also hit quota:', liteErr.message);
             }
           }
 
-          // If there is another backup key available, attempt switching to it
           if (validKeys.length > 1 && attempt < validKeys.length - 1) {
             const nextIdx = (currentKeyIdx + 1) % validKeys.length;
             currentKeyIdx = nextIdx;
             if (onSwitchKey) {
               onSwitchKey(nextIdx, `Switched to backup key ${nextIdx + 1} due to quota limit.`);
             }
-            continue; // try next key
+            continue;
           }
 
           throw new Error('Gemini API quota reached. Please wait a minute before making another request, or add a backup key.');
         }
       }
 
-      // Check for Invalid Key (400, 401, 403, or invalid API key string)
+      // Check for Invalid Key
       const isKeyInvalid =
         err.status === 400 ||
         err.status === 401 ||
@@ -315,15 +375,9 @@ export async function callGemini({
         if (onSwitchKey) {
           onSwitchKey(nextIdx, msg);
         }
-        continue; // try next key
+        continue;
       }
 
-      // Check for Model Not Found (404)
-      if (err.status === 404 || err.message?.toLowerCase().includes('not found')) {
-        throw new Error(`The model "${currentModel}" is not available for this key. Try switching model in Settings to "${FALLBACK_LITE_MODEL}" or "gemini-1.5-flash".`);
-      }
-
-      // If it's the last attempt or unrecoverable error, throw friendly message
       throw err;
     }
   }

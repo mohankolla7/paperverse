@@ -53,6 +53,7 @@ export default function Dashboard({
   apiKeys,
   activeKeyIndex,
   onSwitchKey,
+  onSwitchModel,
   model,
   onOpenKeyModal,
   toastMessage
@@ -127,6 +128,7 @@ export default function Dashboard({
             apiKeys={apiKeys}
             activeKeyIndex={activeKeyIndex}
             onSwitchKey={onSwitchKey}
+            onSwitchModel={onSwitchModel}
             model={model}
             onOpenKeyModal={onOpenKeyModal}
           />
@@ -137,6 +139,7 @@ export default function Dashboard({
             apiKeys={apiKeys}
             activeKeyIndex={activeKeyIndex}
             onSwitchKey={onSwitchKey}
+            onSwitchModel={onSwitchModel}
             model={model}
             onOpenKeyModal={onOpenKeyModal}
           />
@@ -147,6 +150,7 @@ export default function Dashboard({
             apiKeys={apiKeys}
             activeKeyIndex={activeKeyIndex}
             onSwitchKey={onSwitchKey}
+            onSwitchModel={onSwitchModel}
             model={model}
             onOpenKeyModal={onOpenKeyModal}
           />
@@ -157,6 +161,7 @@ export default function Dashboard({
             apiKeys={apiKeys}
             activeKeyIndex={activeKeyIndex}
             onSwitchKey={onSwitchKey}
+            onSwitchModel={onSwitchModel}
             model={model}
             onOpenKeyModal={onOpenKeyModal}
           />
@@ -167,6 +172,7 @@ export default function Dashboard({
             apiKeys={apiKeys}
             activeKeyIndex={activeKeyIndex}
             onSwitchKey={onSwitchKey}
+            onSwitchModel={onSwitchModel}
             model={model}
             onOpenKeyModal={onOpenKeyModal}
           />

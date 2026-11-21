@@ -194,6 +194,7 @@ export default function App() {
               activeKeyIndex={activeKeyIndex}
               onSwitchKey={handleSwitchKey}
               model={currentModel}
+              onSwitchModel={setCurrentModel}
               onOpenKeyModal={() => setIsKeyModalOpen(true)}
               toastMessage={toastMessage}
             />
@@ -229,6 +230,7 @@ export default function App() {
         activeKeyIndex={activeKeyIndex}
         onSetActiveKeyIndex={setActiveKeyIndex}
         currentModel={currentModel}
+        onSaveModel={setCurrentModel}
       />
 
       <SettingsModal

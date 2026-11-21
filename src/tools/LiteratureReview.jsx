@@ -20,7 +20,7 @@ const SAMPLE_PAPERS = [
   }
 ];
 
-export default function LiteratureReview({ apiKeys, activeKeyIndex, onSwitchKey, model, onOpenKeyModal }) {
+export default function LiteratureReview({ apiKeys, activeKeyIndex, onSwitchKey, onSwitchModel, model, onOpenKeyModal }) {
   const [inputMode, setInputMode] = useState('upload'); // 'upload' | 'text'
   const [files, setFiles] = useState([]);
   const [textInputs, setTextInputs] = useState(['', '']);
@@ -139,6 +139,7 @@ Do not include Markdown backticks or any prefix/suffix outside the JSON.`;
         apiKeys,
         activeKeyIndex,
         onSwitchKey,
+        onSwitchModel,
         model,
         systemInstruction,
         prompt,

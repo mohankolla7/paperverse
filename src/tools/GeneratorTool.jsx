@@ -7,7 +7,7 @@ const SAMPLE_IDEA = {
   idea: 'Using low-cost smartphone cameras with lightweight vision transformers to detect early signs of diabetic retinopathy in rural clinics where ophthalmologists are scarce.'
 };
 
-export default function GeneratorTool({ apiKeys, activeKeyIndex, onSwitchKey, model, onOpenKeyModal }) {
+export default function GeneratorTool({ apiKeys, activeKeyIndex, onSwitchKey, onSwitchModel, model, onOpenKeyModal }) {
   const [domain, setDomain] = useState('');
   const [idea, setIdea] = useState('');
   const [loading, setLoading] = useState(false);
@@ -70,6 +70,7 @@ Research Idea: ${idea}`;
         apiKeys,
         activeKeyIndex,
         onSwitchKey,
+        onSwitchModel,
         model,
         systemInstruction,
         prompt,

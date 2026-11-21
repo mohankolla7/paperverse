@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Key, X, ExternalLink, ShieldCheck, RefreshCw, CheckCircle2, AlertCircle, Trash2, Eye, EyeOff, Plus } from 'lucide-react';
-import { validateGeminiKey } from '../lib/gemini';
+import { Key, X, ExternalLink, ShieldCheck, RefreshCw, CheckCircle2, AlertCircle, Trash2, Eye, EyeOff, Plus, Cpu } from 'lucide-react';
+import { validateGeminiKey, AVAILABLE_MODELS } from '../lib/gemini';
 
 export default function ApiKeyModal({
   isOpen,
@@ -10,18 +10,20 @@ export default function ApiKeyModal({
   onClearKeys,
   activeKeyIndex,
   onSetActiveKeyIndex,
-  currentModel
+  currentModel,
+  onSaveModel
 }) {
-  // Local editable copies of up to 3 keys
   const [keysInput, setKeysInput] = useState(() => {
     const list = [...(apiKeys || [])];
     while (list.length < 1) list.push('');
     return list;
   });
 
+  const [selectedModel, setSelectedModel] = useState(currentModel || 'gemini-1.5-flash');
   const [showKey, setShowKey] = useState([false, false, false]);
   const [isValidating, setIsValidating] = useState(false);
   const [validationSuccess, setValidationSuccess] = useState(false);
+  const [successNote, setSuccessNote] = useState('');
   const [validationError, setValidationError] = useState(null);
 
   if (!isOpen) return null;
@@ -67,18 +69,25 @@ export default function ApiKeyModal({
     setIsValidating(true);
     setValidationError(null);
     setValidationSuccess(false);
+    setSuccessNote('');
 
     try {
-      // Validate primary key with a tiny request
-      await validateGeminiKey(valid[0], currentModel);
+      // Validate key and auto-discover supported model
+      const result = await validateGeminiKey(valid[0], selectedModel);
+
+      if (result.workingModel && onSaveModel) {
+        onSaveModel(result.workingModel);
+        setSelectedModel(result.workingModel);
+      }
 
       setValidationSuccess(true);
+      setSuccessNote(result.note || `Verified successfully on ${result.workingModel}!`);
       onSaveKeys(valid);
 
-      // Brief success animation before closing
+      // Brief animation before closing
       setTimeout(() => {
         onClose();
-      }, 900);
+      }, 1000);
     } catch (err) {
       console.error('API key verification error:', err);
       setValidationError(err.message || 'Key validation failed. Please check the key.');
@@ -96,7 +105,7 @@ export default function ApiKeyModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-xl glass-panel rounded-3xl border border-white/15 p-6 md:p-8 space-y-6 shadow-2xl">
+      <div className="relative w-full max-w-xl glass-panel rounded-3xl border border-white/15 p-6 md:p-8 space-y-5 shadow-2xl max-h-[92vh] overflow-y-auto">
         {/* Modal Header */}
         <div className="flex items-center justify-between border-b border-white/10 pb-4">
           <div className="flex items-center gap-3">
@@ -120,7 +129,7 @@ export default function ApiKeyModal({
           </button>
         </div>
 
-        {/* Security & Memory-Only Notice */}
+        {/* Security Notice */}
         <div className="flex items-start gap-3 p-3.5 rounded-xl bg-neon-cyan/5 border border-neon-cyan/20 text-xs text-verse-text">
           <ShieldCheck className="w-5 h-5 text-neon-cyan shrink-0 mt-0.5" />
           <div className="space-y-1">
@@ -132,8 +141,35 @@ export default function ApiKeyModal({
           </div>
         </div>
 
-        {/* Up to 3 Key Inputs */}
-        <div className="space-y-4">
+        {/* Model Selection Dropdown inside Key Modal */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-mono uppercase tracking-wider text-verse-muted flex items-center gap-1.5">
+              <Cpu className="w-3.5 h-3.5 text-neon-cyan" />
+              Active Gemini Model
+            </label>
+            <span className="text-[10px] font-mono text-neon-cyan">
+              Auto-probes fallback if not found
+            </span>
+          </div>
+          <select
+            value={selectedModel}
+            onChange={(e) => {
+              setSelectedModel(e.target.value);
+              if (onSaveModel) onSaveModel(e.target.value);
+            }}
+            className="w-full glass-input rounded-xl px-3 py-2 text-xs font-mono focus:ring-1 focus:ring-neon-cyan cursor-pointer bg-space-850"
+          >
+            {AVAILABLE_MODELS.map((m) => (
+              <option key={m.id} value={m.id} className="bg-space-900 text-white">
+                {m.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Key Inputs */}
+        <div className="space-y-3">
           <div className="flex items-center justify-between">
             <label className="text-xs font-mono uppercase tracking-wider text-verse-muted">
               Gemini API Keys (Up to 3 for automatic failover)
@@ -149,7 +185,7 @@ export default function ApiKeyModal({
             </a>
           </div>
 
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             {keysInput.map((val, idx) => (
               <div key={idx} className="space-y-1">
                 <div className="flex items-center justify-between text-[11px] font-mono text-verse-muted">
@@ -174,7 +210,7 @@ export default function ApiKeyModal({
                     value={val}
                     onChange={(e) => handleKeyChange(idx, e.target.value)}
                     placeholder={`AIzaSy... (Gemini key #${idx + 1})`}
-                    className="w-full glass-input rounded-xl px-4 py-2.5 pr-20 text-xs font-mono focus:ring-1 focus:ring-neon-violet"
+                    className="w-full glass-input rounded-xl px-4 py-2.5 pr-14 text-xs font-mono focus:ring-1 focus:ring-neon-violet"
                     autoComplete="off"
                     spellCheck="false"
                   />
@@ -209,7 +245,7 @@ export default function ApiKeyModal({
         {validationSuccess && (
           <div className="flex items-center gap-2 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-mono animate-in fade-in">
             <CheckCircle2 className="w-4 h-4 text-neon-emerald shrink-0" />
-            <span>Key validated successfully! Initializing PaperVerse research engine...</span>
+            <span>{successNote || 'Key validated successfully! Initializing PaperVerse research engine...'}</span>
           </div>
         )}
 
@@ -221,7 +257,7 @@ export default function ApiKeyModal({
         )}
 
         {/* Modal Actions */}
-        <div className="flex items-center justify-between pt-4 border-t border-white/10">
+        <div className="flex items-center justify-between pt-3 border-t border-white/10">
           <button
             type="button"
             onClick={handleForget}
@@ -248,7 +284,7 @@ export default function ApiKeyModal({
               {isValidating ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>Validating Key...</span>
+                  <span>Testing Key...</span>
                 </>
               ) : (
                 <span>Connect & Save</span>
