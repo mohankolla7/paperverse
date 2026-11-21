@@ -26,3 +26,8 @@ dist-ssr
 # Environment variables (strict: paperverse stores keys in-memory only)
 .env
 .env.*
+
+# Streamlit secrets
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
